@@ -1,0 +1,38 @@
+{
+  "name": "dsh-session-intent-title",
+  "version": "1.0.0",
+  "description": "DeepSeek Harness 会话意图自动分类命名插件（⚡ 优化 / 🐛 修复 / ✨ 功能）· Clean & zero-UI-overhead intent classification session title generator for DeepSeek Harness",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "session-title",
+    "intent-classification",
+    "title-generator"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WiseXin/dsh-session-intent-title.git"
+  },
+  "bugs": {
+    "url": "https://github.com/WiseXin/dsh-session-intent-title/issues"
+  },
+  "homepage": "https://github.com/WiseXin/dsh-session-intent-title#readme",
+  "author": "WiseXin",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  }
+}
