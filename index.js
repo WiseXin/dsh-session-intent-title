@@ -172,11 +172,11 @@ function assembleSessionTitle(type, theme, locale) {
 }
 
 function shouldSkipAutoTitle(session) {
+	const id = session?.id || "";
+	if (id.startsWith("dsh-automation-session-") || id.startsWith("im:")) return true;
 	const origin = session.origin ?? session.header?.origin;
-	return session.id.startsWith("dsh-automation-session-") ||
-		session.id.startsWith("im:") ||
-		origin === "subagent" ||
-		(session.header?.parentSession !== void 0 && session.header.parentSession !== "");
+	if (origin === "subagent") return true;
+	return false;
 }
 
 const SESSION_TITLE_PROVIDER_ID = "dsh-session-intent-title";
@@ -305,7 +305,7 @@ function isOfficialTarget(options) {
 const guardRegistry = new WeakMap();
 
 function silenceOfficialProvider(host, shouldSilence) {
-	const sessionTitle = host.get?.("sessionTitle");
+	const sessionTitle = host.sessionTitle ?? host.get?.("sessionTitle");
 	if (!sessionTitle || typeof sessionTitle.register !== "function") return void 0;
 	const target = Object.getPrototypeOf(sessionTitle);
 	if (typeof target?.register !== "function") return void 0;
@@ -339,12 +339,14 @@ export const name = "dsh-session-intent-title";
 export const inject = ["sessionTitle", "llm", "loader"];
 
 export function apply(ctx) {
-	const sessionTitle = ctx.get("sessionTitle");
-	const llm = ctx.get("llm");
+	const sessionTitle = ctx.sessionTitle ?? ctx.get?.("sessionTitle");
+	const llm = ctx.llm ?? ctx.get?.("llm");
 	if (!sessionTitle || !llm) {
-		ctx.logger?.warn("dsh-session-intent-title: sessionTitle 或 llm 服务未就绪");
+		console.warn("[dsh-session-intent-title] sessionTitle 或 llm 服务未就绪");
 		return;
 	}
+
+	console.log("[dsh-session-intent-title] Plugin loaded and applying...");
 
 	let silencing = false;
 	const restoreGuard = silenceOfficialProvider(ctx, () => silencing);
@@ -364,6 +366,7 @@ export function apply(ctx) {
 		id: SESSION_TITLE_PROVIDER_ID,
 		automatic: "first-prompt",
 		generate: (request) => {
+			console.log("[dsh-session-intent-title] generate() callback triggered!");
 			const firstMsg = request.messages?.[0]?.text;
 			const locale = inferLocaleFromMessage(firstMsg);
 			return generateIntentSessionTitle(llm, request, locale);
@@ -372,8 +375,7 @@ export function apply(ctx) {
 
 	silencing = true;
 
-	// 兜底保障拦截：针对复用空白会话/休眠会话时 DSH 注入 seed 导致跳过常规生成的问题，
-	// 监听轮次结束事件 (turn/end)，若当前仍为截断兜底 (fallback) 且未被用户手动锁定，自动升级为意图分类标题
+	// 兜底保障拦截：针对系统在首轮前提前打上 fallback 的情况，监听轮次结束并自动校正升级
 	const activeElevations = new Set();
 	const unbindEvent = ctx.on("session/event", async (session, event) => {
 		if (event.type !== "turn/end") return;
@@ -395,16 +397,19 @@ export function apply(ctx) {
 			}
 		}
 
-		// 仅在首轮对话时执行升级
-		if (userMessages.length !== 1) return;
+		if (userMessages.length === 0) return;
 		const first = userMessages[0];
 
 		// 从事件流中准确提取模型配置
 		const headerEvent = events.findLast((e) => e.type === "request/header");
 		const headerConfig = headerEvent?.data?.header?.config;
-		if (!headerConfig?.provider || !headerConfig?.model) return;
+		if (!headerConfig?.provider || !headerConfig?.model) {
+			console.log("[dsh-session-intent-title] No headerConfig found in events, skip elevation");
+			return;
+		}
 
 		activeElevations.add(session.id);
+		console.log(`[dsh-session-intent-title] Elevating session ${session.id} from fallback...`);
 		try {
 			const locale = inferLocaleFromMessage(first.text);
 			const result = await generateIntentSessionTitle(llm, {
@@ -417,6 +422,7 @@ export function apply(ctx) {
 			const latestSnapshot = sessionTitle.get?.(session);
 			if (latestSnapshot?.source?.kind === "user") return;
 
+			console.log(`[dsh-session-intent-title] Elevated title successfully: ${result.title}`);
 			session.append("session/title", {
 				title: result.title,
 				messageSeqs: result.messageSeqs,
@@ -427,7 +433,7 @@ export function apply(ctx) {
 				}
 			});
 		} catch (err) {
-			ctx.logger?.warn?.("dsh-session-intent-title fallback elevation error: " + (err?.message || err));
+			console.warn("[dsh-session-intent-title] Elevation error:", err.message);
 		} finally {
 			activeElevations.delete(session.id);
 		}
