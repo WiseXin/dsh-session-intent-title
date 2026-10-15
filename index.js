@@ -181,7 +181,7 @@ function shouldSkipAutoTitle(session) {
 
 const SESSION_TITLE_PROVIDER_ID = "dsh-session-intent-title";
 const MAX_INPUT_BYTES = 4096;
-const MAX_OUTPUT_TOKENS = 64;
+const MAX_OUTPUT_TOKENS = 1024; // 大白话：64 太小了，antigravity 的 gemini-3.8-flash 实际走 tiered 模型，思考 token 会把 64 的预算吃光，导致流以 max-tokens 结束、标题生成直接失败；提高到 1024 后实测正常
 const TIMEOUT_MS = 60000;
 
 async function collectText(chunks) {
