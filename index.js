@@ -372,11 +372,11 @@ export function apply(ctx) {
 
 	silencing = true;
 
-	// 兜底保障拦截：针对“复用空白会话”或“休眠恢复会话”由于系统注入 seed 导致跳过生成的问题，
-	// 监听第一轮结束事件，若发现仍为 fallback 且未被用户锁定，则自动执行校正并升级为意图分类标题
+	// 兜底保障拦截：针对复用空白会话/休眠会话时 DSH 注入 seed 导致跳过常规生成的问题，
+	// 监听轮次结束事件 (turn/end)，若当前仍为截断兜底 (fallback) 且未被用户手动锁定，自动升级为意图分类标题
 	const activeElevations = new Set();
 	const unbindEvent = ctx.on("session/event", async (session, event) => {
-		if (event.type !== "turn/end" && event.type !== "request/header") return;
+		if (event.type !== "turn/end") return;
 		if (shouldSkipAutoTitle(session)) return;
 		if (activeElevations.has(session.id)) return;
 
@@ -399,7 +399,9 @@ export function apply(ctx) {
 		if (userMessages.length !== 1) return;
 		const first = userMessages[0];
 
-		const headerConfig = session.requestHeader?.()?.config;
+		// 从事件流中准确提取模型配置
+		const headerEvent = events.findLast((e) => e.type === "request/header");
+		const headerConfig = headerEvent?.data?.header?.config;
 		if (!headerConfig?.provider || !headerConfig?.model) return;
 
 		activeElevations.add(session.id);
@@ -425,7 +427,7 @@ export function apply(ctx) {
 				}
 			});
 		} catch (err) {
-			// 兜底静默失败，保留原有 fallback 文本
+			ctx.logger?.warn?.("dsh-session-intent-title fallback elevation error: " + (err?.message || err));
 		} finally {
 			activeElevations.delete(session.id);
 		}
