@@ -372,9 +372,69 @@ export function apply(ctx) {
 
 	silencing = true;
 
+	// 兜底保障拦截：针对“复用空白会话”或“休眠恢复会话”由于系统注入 seed 导致跳过生成的问题，
+	// 监听第一轮结束事件，若发现仍为 fallback 且未被用户锁定，则自动执行校正并升级为意图分类标题
+	const activeElevations = new Set();
+	const unbindEvent = ctx.on("session/event", async (session, event) => {
+		if (event.type !== "turn/end" && event.type !== "request/header") return;
+		if (shouldSkipAutoTitle(session)) return;
+		if (activeElevations.has(session.id)) return;
+
+		const currentSnapshot = sessionTitle.get?.(session);
+		if (!currentSnapshot) return;
+
+		// 只有当前标题是兜底截断（fallback），且非用户手动锁定（user），才执行自动升级
+		if (currentSnapshot.source?.kind !== "fallback") return;
+
+		const events = session.snapshotEvents();
+		const userMessages = [];
+		for (const ev of events) {
+			if (ev.type === "user/message" && ev.data?.source?.kind === "user") {
+				const text = ev.data.content?.filter((b) => b.type === "text").map((b) => b.text).join("\n") || "";
+				if (text.trim()) userMessages.push({ seq: ev.seq, text });
+			}
+		}
+
+		// 仅在首轮对话时执行升级
+		if (userMessages.length !== 1) return;
+		const first = userMessages[0];
+
+		const headerConfig = session.requestHeader?.()?.config;
+		if (!headerConfig?.provider || !headerConfig?.model) return;
+
+		activeElevations.add(session.id);
+		try {
+			const locale = inferLocaleFromMessage(first.text);
+			const result = await generateIntentSessionTitle(llm, {
+				session,
+				messages: [first],
+				route: { provider: headerConfig.provider, model: headerConfig.model }
+			}, locale);
+
+			// 再次检查确认未被用户在此期间手动改名
+			const latestSnapshot = sessionTitle.get?.(session);
+			if (latestSnapshot?.source?.kind === "user") return;
+
+			session.append("session/title", {
+				title: result.title,
+				messageSeqs: result.messageSeqs,
+				source: {
+					kind: "provider",
+					provider: SESSION_TITLE_PROVIDER_ID,
+					model: result.model
+				}
+			});
+		} catch (err) {
+			// 兜底静默失败，保留原有 fallback 文本
+		} finally {
+			activeElevations.delete(session.id);
+		}
+	});
+
 	ctx.effect(() => () => {
 		silencing = false;
 		restoreGuard?.();
 		dispose?.();
+		unbindEvent?.();
 	}, "dsh-session-intent-title");
 }
